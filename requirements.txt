@@ -1,0 +1,7 @@
+python-telegram-bot
+Flask
+PyMuPDF
+pytesseract
+Pillow
+python-docx
+openai
