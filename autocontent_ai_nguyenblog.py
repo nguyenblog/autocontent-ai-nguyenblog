@@ -8,6 +8,8 @@ from docx import Document
 from openai import OpenAI
 import os
 from flask import Flask, request
+import threading
+import asyncio
 
 # 🛠️ Load API Keys từ biến môi trường
 TOKEN = os.getenv("TOKEN")
@@ -18,7 +20,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # 🔹 Cấu hình Flask để chạy Webhook
 app = Flask(__name__)
 
-WEBHOOK_URL = "https://your-railway-app.up.railway.app/webhook"  # Thay bằng URL từ Railway sau khi deploy
+WEBHOOK_URL = "https://your-railway-app.up.railway.app/webhook"  # 🔄 Thay bằng URL từ Railway sau khi deploy
 
 # Định nghĩa trạng thái cho ConversationHandler
 AWAITING_PROMPT = 1
@@ -120,12 +122,20 @@ async def start_bot():
     global application
     application = Application.builder().token(TOKEN).build()
 
-    await application.initialize()  # Đảm bảo bot khởi động trước khi webhook xử lý request
+    await application.initialize()
     await application.bot.set_webhook(url=WEBHOOK_URL)
 
     print(f"🚀 Webhook đã được thiết lập tại: {WEBHOOK_URL}")
+    await application.run_polling()
+
+def run_flask():
+    """ Chạy Flask trên một thread riêng để không chặn bot """
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.create_task(start_bot())  # Chạy bot song song với Flask
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    # Tạo và chạy bot trong một luồng asyncio riêng
+    bot_thread = threading.Thread(target=lambda: asyncio.run(start_bot()), daemon=True)
+    bot_thread.start()
+
+    # Chạy Flask trên main thread
+    run_flask()
