@@ -9,7 +9,7 @@ from openai import OpenAI
 import os
 from flask import Flask, request
 
-# 🛠️ Load API Keys từ biến môi trường (Thay vì hardcode)
+# 🛠️ Load API Keys từ biến môi trường
 TOKEN = os.getenv("TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -18,7 +18,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # 🔹 Cấu hình Flask để chạy Webhook
 app = Flask(__name__)
 
-WEBHOOK_URL = "https://your-railway-app.up.railway.app/webhook"  # 🔄 Thay bằng URL từ Railway sau khi deploy
+WEBHOOK_URL = "https://your-railway-app.up.railway.app/webhook"  # Thay bằng URL từ Railway sau khi deploy
 
 # Định nghĩa trạng thái cho ConversationHandler
 AWAITING_PROMPT = 1
@@ -33,11 +33,11 @@ async def query_openai(prompt, text):
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": text}
-            ],
-            max_tokens=1000  # Giới hạn phản hồi tối đa 1000 tokens (~3000-4000 ký tự)
-        )
+            ]
+        )  # ❌ Xóa max_tokens để không giới hạn token
         return response.choices[0].message.content.strip()
     except Exception as e:
+        print(f"⚠️ Lỗi OpenAI: {str(e)}")  # Log lỗi để debug
         return f"⚠️ Lỗi khi gọi API OpenAI: {str(e)}"
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -78,6 +78,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AWAITING_PROMPT
 
     except Exception as e:
+        print(f"⚠️ Lỗi xử lý file: {str(e)}")  # Log lỗi để debug
         await update.message.reply_text(f"⚠️ Đã xảy ra lỗi trong quá trình xử lý: {str(e)}")
 
 async def handle_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -107,18 +108,24 @@ def index():
 
 @app.route("/webhook", methods=["POST"])
 async def webhook():
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    await application.process_update(update)
-    return "OK", 200
+    try:
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        await application.update_queue.put(update)
+        return "OK", 200
+    except Exception as e:
+        print(f"⚠️ Lỗi Webhook: {str(e)}")
+        return "ERROR", 500
 
 async def start_bot():
     global application
     application = Application.builder().token(TOKEN).build()
 
+    await application.initialize()  # Đảm bảo bot khởi động trước khi webhook xử lý request
     await application.bot.set_webhook(url=WEBHOOK_URL)
+
     print(f"🚀 Webhook đã được thiết lập tại: {WEBHOOK_URL}")
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(start_bot())
+    asyncio.create_task(start_bot())  # Chạy bot song song với Flask
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
