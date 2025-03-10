@@ -1,3 +1,7 @@
+import asyncio
+import threading
+import os
+from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler, ConversationHandler
 import fitz  # PyMuPDF
@@ -6,12 +10,8 @@ from PIL import Image
 import io
 from docx import Document
 from openai import OpenAI
-import os
-from flask import Flask, request
-import threading
-import asyncio
 
-# 🛠️ Load API Keys từ biến môi trường
+# 🛠 Load API Keys từ biến môi trường
 TOKEN = os.getenv("TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -19,13 +19,10 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 # 🔹 Cấu hình Flask để chạy Webhook
 app = Flask(__name__)
-
-WEBHOOK_URL = "https://your-railway-app.up.railway.app/webhook"  # 🔄 Thay bằng URL từ Railway sau khi deploy
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "autocontent-ai-nguyenblog-production.up.railway.app")
 
 # Định nghĩa trạng thái cho ConversationHandler
 AWAITING_PROMPT = 1
-
-# Dictionary lưu trữ văn bản của từng người dùng
 user_text_data = {}
 
 async def query_openai(prompt, text):
@@ -36,10 +33,9 @@ async def query_openai(prompt, text):
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": text}
             ]
-        )  # ❌ Xóa max_tokens để không giới hạn token
+        )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"⚠️ Lỗi OpenAI: {str(e)}")  # Log lỗi để debug
         return f"⚠️ Lỗi khi gọi API OpenAI: {str(e)}"
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -51,7 +47,6 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Đã nhận file, đang xử lý...")
 
         full_text = ""
-        
         if file_path.lower().endswith(".pdf"):
             pdf = fitz.open(file_path)
             for page_num in range(len(pdf)):
@@ -66,11 +61,9 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ocr_text = pytesseract.image_to_string(img, lang="eng+vie")
                     full_text += ocr_text
             pdf.close()
-        
         elif file_path.lower().endswith(".docx"):
             doc = Document(file_path)
             full_text = '\n'.join([para.text for para in doc.paragraphs])
-        
         else:
             await update.message.reply_text("⚠️ Định dạng file không được hỗ trợ.")
             return
@@ -78,9 +71,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_text_data[update.message.chat_id] = full_text
         await update.message.reply_text("📌 Vui lòng nhập prompt để xử lý nội dung văn bản.")
         return AWAITING_PROMPT
-
     except Exception as e:
-        print(f"⚠️ Lỗi xử lý file: {str(e)}")  # Log lỗi để debug
         await update.message.reply_text(f"⚠️ Đã xảy ra lỗi trong quá trình xử lý: {str(e)}")
 
 async def handle_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -110,32 +101,26 @@ def index():
 
 @app.route("/webhook", methods=["POST"])
 async def webhook():
-    try:
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        await application.update_queue.put(update)
-        return "OK", 200
-    except Exception as e:
-        print(f"⚠️ Lỗi Webhook: {str(e)}")
-        return "ERROR", 500
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    await application.process_update(update)
+    return "OK", 200
+
+def run_flask():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 
 async def start_bot():
     global application
     application = Application.builder().token(TOKEN).build()
-
-    await application.initialize()
     await application.bot.set_webhook(url=WEBHOOK_URL)
-
     print(f"🚀 Webhook đã được thiết lập tại: {WEBHOOK_URL}")
-    await application.run_polling()
-
-def run_flask():
-    """ Chạy Flask trên một thread riêng để không chặn bot """
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 
 if __name__ == "__main__":
-    # Tạo và chạy bot trong một luồng asyncio riêng
-    bot_thread = threading.Thread(target=lambda: asyncio.run(start_bot()), daemon=True)
-    bot_thread.start()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
-    # Chạy Flask trên main thread
-    run_flask()
+    # Chạy Flask trên một thread riêng
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    # Chạy bot Telegram trên event loop chính
+    loop.run_until_complete(start_bot())
